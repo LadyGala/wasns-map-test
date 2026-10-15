@@ -10,6 +10,49 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
 
+    <!-- Early Global Definitions: Prevents ReferenceError under any loading condition -->
+    <script>
+        var PASSWORD = 'wasns1970';
+        var leafletMap = null;
+        var initialBounds = null;
+        var hasUserInteracted = false;
+
+        function checkPassword() {
+            var input = document.getElementById('passInput');
+            if (!input) return;
+            if (input.value.toLowerCase().trim() === PASSWORD) {
+                input.blur();
+                document.getElementById('password-overlay').style.display = 'none';
+                if (leafletMap && typeof leafletMap.invalidateSize === 'function') {
+                    setTimeout(function() {
+                        leafletMap.invalidateSize({ pan: false });
+                        if (initialBounds && !hasUserInteracted) {
+                            leafletMap.fitBounds(initialBounds, { animate: false });
+                        }
+                    }, 250);
+                }
+            } else {
+                document.getElementById('error-msg').style.display = 'block';
+                input.value = '';
+            }
+        }
+
+        function toggleContact() {
+            var modal = document.getElementById('contact-modal');
+            if (modal) {
+                modal.style.display = (modal.style.display === 'flex') ? 'none' : 'flex';
+            }
+        }
+
+        function toggleLegend(e) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            var pop = document.getElementById('legend-popover');
+            if (pop) {
+                pop.style.display = (pop.style.display === 'block') ? 'none' : 'block';
+            }
+        }
+    </script>
+
     <style>
         body, html { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
         #map { height: calc(100% - 70px); width: 100%; background: #f0f0f0; }
@@ -42,7 +85,8 @@
             border-bottom: 1px solid #f5f5f5; font-size: 14px; color: #333;
         }
         .legend-item:last-child { border-bottom: none; }
-        .legend-item img { width: 32px; height: 32px; object-fit: contain; flex-shrink: 0; border-radius: 4px; }
+        .legend-icon { width: 34px; height: 34px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        .legend-icon img, .legend-icon svg { width: 32px; height: 32px; object-fit: contain; border-radius: 4px; }
         .legend-labels { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; line-height: 1.3; }
         .legend-sep { color: #999; }
 
@@ -90,7 +134,6 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.25); font-size: 14px; padding: 8px 12px;
             text-align: left; white-space: nowrap; direction: ltr;
             pointer-events: auto !important; cursor: pointer;
-            transition: transform 0.1s, box-shadow 0.1s;
         }
         .custom-tooltip:hover {
             box-shadow: 0 6px 16px rgba(0,0,0,0.35);
@@ -158,40 +201,65 @@
                 <span>מקרא</span>
                 <span>مفتاح الخريطة</span>
             </div>
+
+            <!-- חניה ציבורית -->
             <div class="legend-item">
-                <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAvADADASIAAhEBAxEB/8QAHAAAAgICAwAAAAAAAAAAAAAABggFBwMEAQIJ/8QANRAAAQQABAQDBQcFAQAAAAAAAQIDBAUABhEhBwgSUUFxkRMUMWGxFRYXM0JjciJigZKhwf/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwBnbezhU9bJsLOS1FhR0Fx1506JQkYVPiVzF21lIeh5KT9m14JSJjiAX3R3AOyB6nyxh5qc/PW+ZjlWA8RW1igZISdnpGmu/wAkA6eevYYoNzZtZB/SfpgJC0ubG2lKk2lhJlyFblx94rJ9TjmpubKplJk1VjKiSE7hxh0pI9DhypVBw9yxw1g5hv8ALFa5Hbhx1PLbgocWpSwka6eO6sDuW5vBLiBPTSQ6KHHmvA+xQ7DMVayBqehaf1ab6a64AK4Z8xlrXSWYWdk/aMAkJ99bQEvtfNQGyx6Hzw1lVYRLWujz62Q3JhyEBxp1pWqVpPiMI3x04b/h3mZlqG64/UTkKdirc3WjpOim1HxI1BB8QcGnKpn56rzF907B0qrrEqVF6js0+BqQPksA7dwO5wFG3M52ztps+QoqekvreWT4lSif/caLv5Ln8T9MSmZax2lzDZ1klJS7DkuMKB/tUQP+aHEW7+Uv+J+mAdzijU2F3y8twKeG9NmuwoXQwynqWrQtk6DyBOKO4O8Js4/iFS2FlTSquBXyUSnn5QCNQjcJSNdSSdu3xwwOcs0Tsm8DYt5VIYcmRoUMIS+kqQeroSdQCD8DhebLmMz3LjqaYVVQSoae1YjEqHl1qIHpgC3nKuYr9hlymaWlUuMl2S8AdShK+lKQe2vST/jC+0E92qva6wYUUuxZLbySO6VA4w2M6VZzn5tjJelTH1Fbrzyipa1dyTjcynVO3mZ6msYSVOS5TbIA7FQ1PprgL85rOHLzNgc51LBXGdSlFilA/LWNku6diNAT4EA+OFsdB9msD49J+mPTd9luQw4y+2hxpxJStCxqlQOxBB+Iwt/EvlublSXZ+RZLUYrJUqukkhsH9te5T5Hb5jAZ+LOdMs2XAA1MC+rZNl7pDR7q0+lTmqVN9Q6fjtodfLCpnBDmbJt7lmWuPcwQw4k79Lrawf8AU47ZYyXfZnloj0sEPuKOn9TyEAepwA5hleVLhy8qZ99LZgoZQlTdahY3WTsp3y01A76k9sSXDPlvZhyGp+eZDUtaCFJro5Pstf3F7FXkNB8zhjmWkMtIaZQlttCQlKEjQJA2AA8BgP/Z" alt="חניה ציבורית">
+                <div class="legend-icon">
+                    <img src="חניה ציבורית.jpg" alt="P" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <svg style="display:none" viewBox="0 0 36 36"><circle cx="18" cy="18" r="17" fill="#1a1a1a"/><text x="18" y="25" text-anchor="middle" fill="#fff" font-size="22" font-weight="bold" font-family="sans-serif">P</text></svg>
+                </div>
                 <div class="legend-labels">
                     <strong>חניה ציבורית</strong>
                     <span class="legend-sep">/</span>
                     <span>موقف سيارات عام</span>
                 </div>
             </div>
+
+            <!-- ציוד כיבוי אש -->
             <div class="legend-item">
-                <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAnADADASIAAhEBAxEB/8QAGwAAAgMBAQEAAAAAAAAAAAAAAAUEBwgGAQP/xAA3EAABAwMCAwQHBgcAAAAAAAABAgMEAAURBiEHEhMUMUFRCCIyYYGRoRYzVHGx0iM0NnODkrP/xAAaAQACAgMAAAAAAAAAAAAAAAAEBgIFAQMH/8QALhEAAQIFAQUGBwAAAAAAAAAAAQIDAAQFESESBjFRYXEVI0GBsdEzNXKSobLw/9oADAMBAAIRAxEAPwDVJOBk91U5xP40R9O3SRZNOxW7jdWUYefWvEeK4e5KsbrVjJKQRjbJ8o2uuO8G1Tbla9P2uXc5cbqMdq5kNsJeAxtzHKwlWxwPA4rNspyWI8h5IEm4PKU64pRA6jqzlSzn3kn5ChJmZDY0oI1H8dYYaLRVTai7MJUGki+Abq5J435R1N01xrC5vqfl6qvDalZ9WI92ZsA+ASkfqSffTzR/FnVmmXwJUx2/QCQVx568vBIB+7d8zt7QI27xSzTd40HarehFz4fXC9z1JHWlz5jKypXjyp5sITnOAB3eJrmdQyLe/f2XdLWCXZ7U4kh+K/MS8lC87Lb3JSPNOceVDErQNYdBPDEXDbcrMLDDkgpCDgKGq45nHv5xtfR2prbq2wRrvZ3SuM9kFKxyraWNlIWPBQOxFO6x9ws4gPaCusxaob8+2zkp6zDLiUqQ4k7ODmIHskgjxwK0pw819Z9dw5b1oElp2IsNvx5TYQ42SMpOASCCM4IPhRzL6XkgjfwhYqdLfpzym3EnSDYG2Dwz0jFlvcLjC1kAFT7yiB3DLqjUkAqOBvUO1fyf+V3/AKKqU4VBl3pfeciuX88bfWl9/Lqup9Y6/S1aaeyq25Cf1EItTXhUJMZENwF4r51AbjlGRg/mc/KmdtuTFyCzHVlSEpUpPlkZ+hyPhSDSVrC+adK5i4lwpSlXuBCs/E/SvtYIBiajuJaBEZsFA8snBA+FFutshCkDekb/ADhbkJ6ormG5pwd28baeACcEcL5J6R0lXP6J61faPWac+r0oRx8HKpirm9E/+ptaf2YX6OVGm/FPT2gjbX5en6h6Kip9X6duOh75Ks9xiOOBDrjjDzTjZS60pZUlWCoEHB3BHhSXty/wUn5t/vooqxVItLUVHxhMY2rqEu0llBFkgAY8BHqJykBWLe/6xyT/AA9z5+3XgmqGeWBIGTk4Lff/AL0UVjs9nnExtfURkaftg7cv8DJ+bf760b6LmmrhAi3zUM5roR7r0G4zZWlSyloKys8pIGSrAGc7UUVsalW2VakwHUNoJypNBl8jSDfAtn+Mf//Z" alt="ציוד כיבוי אש">
+                <div class="legend-icon">
+                    <img src="ציוד כיבוי אש.jpg" alt="Fire Equipment" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <svg style="display:none" viewBox="0 0 36 36"><path d="M11 14 V11 A7 7 0 0 1 25 11 V14" fill="none" stroke="#e60000" stroke-width="4" stroke-linecap="round"/><rect x="4" y="13" width="28" height="19" rx="4" fill="#e60000" stroke="#000" stroke-width="2"/><path d="M18 17 C15 21 14 24 16 28 C18 30 21 29 21 25 C21 22 19 20 18 17 Z" fill="#000"/></svg>
+                </div>
                 <div class="legend-labels">
                     <strong>ציוד כיבוי אש</strong>
                     <span class="legend-sep">/</span>
                     <span>معدات إطفاء الحريق</span>
                 </div>
             </div>
+
+            <!-- ברז כיבוי אש -->
             <div class="legend-item">
-                <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAwACcDASIAAhEBAxEB/8QAGwAAAgMBAQEAAAAAAAAAAAAAAAgFBgcDAgT/xAAxEAABAwMDAgQFAgcAAAAAAAABAgMEBQYRAAchEjETQVFhFBUiMnGCkUJTgZShwdL/xAAWAQEBAQAAAAAAAAAAAAAAAAAFBgT/xAAlEQABAwMDBAMBAAAAAAAAAAABAgMRAAQhBUFREhMxYSKRocH/2gAMAwEAAhEDEQA/AGp1m+5e79u2JNbp0kSqjWXEhQgQUBbiQexWScJz6d/bUnuruLSduKAio1dLj7r6/CjRWsdbysZPJ4AA7n/ZGlAtqrS6rUqzcbghPTqnKW64XZCupoE5CO3AGf2A1nunyw2VgSfqt2n2ZvXw1MDff8qTtu6avRt4pN+ybfqjlOkyZLnwSF5cQlxJA47cdXoM401W2m5lv7hRnzRnXWZscD4iDKT0PNe5HYjPGQf20sfzKf8Ayaf/AHCv+dQybrkWRftGu1EeIt1oLafisSSkyWykggnp8s98HkD01gs9Qcdc6HEgTwaX1PQ0WrJeaUTHmR/aezRqo7W31T9w7UardMadYT4imHmHSCppxIBKcjgjCgQfQ+WjS9TVQ26e5Ft2c1BFShuVebKU4iLGiNoeV1J6erJJwnun39jjSxh6FOqFbuKTRmGE1acVxaf0oWpB5BTnAA5CiT6DJ1btwNj6xatws3HbTUq4kSJD7sthtlCHGAo5T0DqyruocDy99UqlOKkUuO8yy8ZNOlvCTEWgpdR1FWQUn+IZBx+R30Vqa1hPT4TjP3j1kAT7qi0FllS+sn55xwMCfeCox6rqkteOpHyuiOOJ5VHbUPEA/JGM/wBBrit2LSLqtu6IVCi1aA0pbTtNW2lPiqKVjBSQRkZPcHlI1JruFty3qdROqnriwZSpTS2Y5+McWrq+lR/WcnAJwAe2o+V48YUmG3Dky6tKmrlIgxUFxzBCuAB6ZGT+fTWMDtOpLRJPGRODIg8YztvNMvobet1i4ASJ8ggwJEGQN8432ApodoL6te5rZdk0ODHoKW5KmnoSw0yQ6EpJUAkjIIIGcA8e2jWV7W7AIqCTcV7syINUckurRTsNLbDRT0p8RJSfqyVHv5A99Gn0yQJqGWEhRCTIpmldtJpdclyLuZfSmiOpVaZbORn6VYB/wdajvdutdNAuX5FZ1GfWGEJXJnrgOvp6lDIQgAYOARk5PJxxg6wJK6xLlTZ9ZiXPIqU6QJUh1mmltKnE/aQOny1kvkdxroicjb3SWkr7T4dKgIB8kDyIq9JlNma9GT1eK22lxRxxhWQOf0nX07IyXJe8ttSHiPEcoz6ldIwM/jVFD84SHHxAu4OrSEKV8CeQM4H2+515pNQr9u1uBWLahXAzPhtKjoEulqdbLShynAGi7CyNu6FkHbY8Gf2qDV79F3blCVjfEjkR+U+Ix5aNY7sPuVXrvdm0q7KO/DqEZvxmpQiOMNyEZAIIUMJUCRxnkHtwdGqGouv/2Q==" alt="ברז כיבוי אש">
+                <div class="legend-icon">
+                    <img src="ברז כיבוי אש.jpg" alt="Fire Hydrant" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <svg style="display:none" viewBox="0 0 36 36"><path d="M12 10 A6 6 0 0 1 24 10 Z" fill="#ff3300" stroke="#000" stroke-width="2"/><rect x="11" y="12" width="14" height="18" fill="#ff3300" stroke="#000" stroke-width="2"/><rect x="7" y="16" width="4" height="6" fill="#ff3300" stroke="#000" stroke-width="2"/><rect x="25" y="16" width="4" height="6" fill="#ff3300" stroke="#000" stroke-width="2"/><rect x="9" y="30" width="18" height="4" fill="#ff3300" stroke="#000" stroke-width="2"/><circle cx="18" cy="20" r="3" fill="#fff" stroke="#000" stroke-width="1.5"/></svg>
+                </div>
                 <div class="legend-labels">
                     <strong>ברז כיבוי אש</strong>
                     <span class="legend-sep">/</span>
                     <span>صنبور إطفاء الحريق</span>
                 </div>
             </div>
+
+            <!-- מקלט -->
             <div class="legend-item">
-                <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAvADADASIAAhEBAxEB/8QAGQAAAwEBAQAAAAAAAAAAAAAABAYHCAUD/8QANRAAAQMDAgMFBQcFAAAAAAAAAQIDBAUGEQAHEiFBExQxUWEIIjJxgRUjQmKRoaIWJENSgv/EABYBAQEBAAAAAAAAAAAAAAAAAAQFA//EACQRAAIBAwMDBQAAAAAAAAAAAAECAwAEESExUQUSEyJBYYGR/9oADAMBAAIRAxEAPwDUkuSzEjOSJTrbLDSStbjiglKQPEknwGs63dv1Vq7XXLf2kozlWlAlJmqbKknHipKeQCfzKIGhvaBrdTv2/wCm7XWw7wI4ku1J0H3Ry4sKx+FCfeI6kga9o9wQbKbZsraqCh2aVBt+oLSFLfd6k/7dfQeA1jJIFGWpNrbSXDdsY23PsKETtrvVcX9zXLyj0xS+fYNvKJT6YbTj9zrze2+3utgd6ot0R6yEDPYF48Svo4AP5aWX7iu+o1sQfteoKqCnuyDTDpSCseIA/XXegbhXpZlV7nWFLkBGC5Glc1KHorpowuozuulVW6JMBhZATxXdsX2gJESs/wBP7n0xyjVJJ4C+pBQnPTiSfAHz5j11oeLIZlR234ziHWXEhSFoOQoHwIOpHcNItje+xlOFCWprKSG3+H76G569SjzT1HrpS9mS7KhSKxU9t7pPBUactXdeI5ykfEgHqMYUD5HSg2ACDkGosiMjFXGCKRNs6hIkw9x70QlTtTqc1NPjqSPeT2qlLVw+uAgfTV12a25TbEEVSrIDlbkJySf8IPiB6nrqHbewJVNpO4trsKUxVKJVEVJkD4uFsqSSPpwfrrQO0u4LF40nsZJS1V2EgPNE4KvzD089Z4XzerjSqCGQWJ8W2fVz8fVRuhWZXZl4KraFIgUpqa68ah2yOJACjkhPjn56o952nai4rNbrK5lR74tDCp6FJ+6GMBZ6YGOmoZNan1K65dJgvO8cqc40hsKPCSVnpq51OdQ3KPUrD7/GhLiRUtpefWAkrIycE+RzokRUqwx+81ZvRKJEYN+DBC851O/18VPdrpa7T3W+ykSUyIstXYAoPuLB5pV88AaD3wAtLfuz7hiZQ4+pLbxH4+FfCf4LA+mujt/Y5hbk0VqNUotRbjJMtbsZQUlHDywSOvPQG+PDdu+1lW/EIWtDoccx+EKWCSf+W863tgfGwNS+tlGlVlOTjWmje2jVCxL9hbo2/EMqHwiNXIqR8bRATxkeRGAT0KUnqdAKtdbz8W+9p5SZsJ1XamKg4cbUfiQR05+KTrSD7Lb7LjT7aHGnElK0LAKVA8iCD4jUKrezVbtasv1vZ6tCkuvHiepMkkxnPRPiB8iOXQjSZIlkGtAtbuS2YlNQdwdjUman1ugXMqqJhvRql2inMKYKwFE8+mOui6RZVy3hUlutwHFdu4VuSpKcISScknPPTZVN8bwtFwxL0s6F3lvkpyNLThR88ZVoaJvNfV8LEKyrZitOOcgt+WnCfmMpzoosh7tpVZuvNjKRgNzmnh9y3NlLHkqdfQ5OdH3ricBbzmOSEDz/AGA5nS77Nlp1Kt3FUdzLoaLcifxIpzShjhbPIrA8uEBKfMZPUaNtDYmbVa01Xt2KqKzNR7zdOaJ7u31wo8sj8oAHnnV/abQ02ltpCUISAlKUjAAHgANMVQo7RUOWV5nLuck1/9k=" alt="מקלט">
+                <div class="legend-icon">
+                    <img src="מקלט.jpg" alt="Shelter" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <svg style="display:none" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="#fff" stroke="#000" stroke-width="2"/><circle cx="18" cy="18" r="13" fill="#b71c1c"/><polygon points="9,18 15,11 15,25" fill="#fff"/><circle cx="21" cy="12" r="2.2" fill="#fff"/><path d="M17 17 L21 15 L24 19 L21 25 M19 20 L16 25" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+                </div>
                 <div class="legend-labels">
                     <strong>מקלט</strong>
                     <span class="legend-sep">/</span>
                     <span>ملجأ</span>
                 </div>
             </div>
+
+            <!-- פינת גזם -->
             <div class="legend-item">
-                <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAwAC4DASIAAhEBAxEB/8QAGgAAAwADAQAAAAAAAAAAAAAABQcIAAIGA//EADYQAAEDAgQEAwQJBQAAAAAAAAECAwQFBgAHESESMUFREzJhCCJCcRUWIyRicoGxwYKRocLw/8QAGAEAAwEBAAAAAAAAAAAAAAAAAQIDBAD/xAAnEQABBAAFAwQDAAAAAAAAAAABAAIDEQQSEyExUZHhBTJBcRQVwf/aAAwDAQACEQMRAD8Ap+q1CJSqdInVGQ3GiR0Fx11xWiUJHMnE0XfnhcNzynotgNopdHSSn6Ukt8TrvqhB8o/7bGe0Jcz113j9UIjik0SklDtR4TtIfI1S2dOiR/nXsMMXKzLOLEgMVKuRkrfUkKYiqHuMp6Ejvp06Yk9xJytWCfESGTQg93yTwPKRgtW7LhcU+qtXXUHjupxDqgk/IcsbopF5Ws54ka47nprw6yFlxsnpqk7aYsltCG0BDaQlI2ASNAMaSGGpLSmn20OtqGhStIIOF0nDcFL+NiavWN/QrskRltnbKTUI1EzEaYjPPKDcersDhYeV0S4PgUe/L5YfgII1HLCGzkyxht06RUaZH4oCh95i8wj8aew/bng37PF1SahR5dt1Z9T8+jhPgPLOqnoqvIT3UkgpPyHfDsebyu5VMNiXl5hmFPHYjqEpMnYv1ou+PMmfaGpT3qi8T1BWSAf0CdsU5W7ppVEfSxMeV4pHEpDSCstp6FWnlHqcTtkYkW9e0KnP+4uM9Ip6wr4VpWpP8D++HFSGK2MzapUpFBdRSpbKIyXlvIKgEfEUdidcTaTvXNoemtaXTOdzmPhJPNvNWoVC+jGt2pLagQFoLZYcIS6oDUqV676aYLWpnfXY0iOispZlwVL1W6U8LnCTvppttgXmVktdsy9KzUaNAiSIMuSqQypD4StKSAeEg+uuOdiZW383FK/oJ4JSAko406nvoNcEhyWcShxMdqqrYuqi3nAkinO+IjdpxpwAKKSOenY4nGdNlWPdk96nKWh5hTkI6EboUoKGuv5MdVYOUd3U2sU6oSJ8WmJZUHFqacK3COqCnTTltzwMqlJVeN71xuI2HEeMt4e9oAEnh/2wCTbSeVnlfIZYXObTrI+xW6KZyW/Iti9k3FASpMCpuocU4nkxLSAN+wWEg/NJHXDisO7Il00hDzakomtgJkME7pV3HcHvg3WaXCrNMkU+px0SIb6eBxtY1BH8HqD0wi61lzclpVATrUfkToyCShbatJDY18qk8lj1HPqOuHcC05mq80cmHlM8QsH3D+hUBzxmEPFzcuCnpSzVqY046DwarQplRP5T1x6uZi3hcCSxQKV4ZXt4jLZcI/qOw/XHazUP2kPADr6UbXa5sXtGtmiux2ZDSak+kpTqofZJPNau3pgH7PlsTafRJderKFtTKqoFhhY3ZjDya/iUSVH5jA21sm1T69Gr19PGY6wfEap6l8aC5rrxun4iNtE8v2w7QAAAOWC0EnM5Wgjc9+vKKNbDp5Pz2X//2Q==" alt="פינת גזם">
+                <div class="legend-icon">
+                    <img src="פינת גזם.jpg" alt="Pruning Waste" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <svg style="display:none" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="#fff" stroke="#008a2e" stroke-width="4"/><path d="M8 22 L13 22 L13 18" stroke="#795548" stroke-width="2.5" fill="none"/><polygon points="14,14 29,20 14,24" fill="#1b5e20"/></svg>
+                </div>
                 <div class="legend-labels">
                     <strong>פינת גזם</strong>
                     <span class="legend-sep">/</span>
@@ -208,7 +276,6 @@
 <script>
     const IMAGE_FILE = 'map.jpg'; 
     const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSktZVDBT6mPlo8-DXyiQAEU0uT-XocjwQRNSxQ1PptsQSf59U2u9zIggzdB80xnc09nhaiVvJxlwld/pub?gid=0&single=true&output=csv';
-    const PASSWORD = 'wasns1970';
     const SWAP_XY = true; 
     const SCALE = 1.0;    
 
@@ -230,56 +297,20 @@
         fillOpacity: 0.55
     };
 
-    let leafletMap = null;
     let markers = []; 
-    let initialBounds = null;
-    let hasUserInteracted = false;
 
     function updateStatus(msg) {
         const el = document.getElementById('load-status');
         if (el) el.textContent = msg;
     }
 
-    function toggleContact() {
-        const modal = document.getElementById('contact-modal');
-        if (modal) modal.style.display = (modal.style.display === 'flex') ? 'none' : 'flex';
-    }
-
-    function toggleLegend(e) {
-        if (e) e.stopPropagation();
-        const pop = document.getElementById('legend-popover');
-        if (pop) {
-            pop.style.display = (pop.style.display === 'block') ? 'none' : 'block';
-        }
-    }
-
-    // Close legend when clicking anywhere else
+    // Close legend when clicking anywhere outside
     document.addEventListener('click', function() {
         const pop = document.getElementById('legend-popover');
         if (pop && pop.style.display === 'block') {
             pop.style.display = 'none';
         }
     });
-
-    function checkPassword() {
-        const input = document.getElementById('passInput');
-        if (!input) return;
-        if (input.value.toLowerCase().trim() === PASSWORD) {
-            input.blur();
-            document.getElementById('password-overlay').style.display = 'none';
-            if (leafletMap && typeof leafletMap.invalidateSize === 'function') {
-                setTimeout(() => {
-                    leafletMap.invalidateSize({ pan: false });
-                    if (initialBounds && !hasUserInteracted) {
-                        leafletMap.fitBounds(initialBounds, { animate: false });
-                    }
-                }, 200);
-            }
-        } else {
-            document.getElementById('error-msg').style.display = 'block';
-            input.value = '';
-        }
-    }
 
     function setMarkerHighlight(mObj, isHighlighted) {
         if (!mObj || !mObj.marker) return;
@@ -292,11 +323,11 @@
     }
 
     function getOpenMarkers() {
-        return markers.filter(m => m.marker.isTooltipOpen());
+        return markers.filter(function(m) { return m.marker.isTooltipOpen(); });
     }
 
     function focusSingleMarker(targetObj) {
-        markers.forEach(m => {
+        markers.forEach(function(m) {
             if (m !== targetObj) {
                 m.marker.closeTooltip();
                 setMarkerHighlight(m, false);
@@ -314,4 +345,240 @@
         const openList = getOpenMarkers();
         const isCurrentlyOpen = targetObj.marker.isTooltipOpen();
 
-        if (openList.length > 1
+        if (openList.length > 1) {
+            // Multiple bubbles are open: close others, keep this one open, and center on it
+            focusSingleMarker(targetObj);
+        } else if (isCurrentlyOpen) {
+            // Single open bubble clicked: close it
+            targetObj.marker.closeTooltip();
+            setMarkerHighlight(targetObj, false);
+        } else {
+            // Closed marker clicked: open, highlight, and center
+            focusSingleMarker(targetObj);
+        }
+    }
+
+    function initMap() {
+        if (typeof L === 'undefined') {
+            updateStatus("Error: Leaflet library failed to load");
+            const loaderText = document.getElementById('loader-text');
+            if (loaderText) loaderText.textContent = "Error loading map library";
+            return;
+        }
+
+        leafletMap = L.map('map', { crs: L.CRS.Simple, minZoom: -3, zoomSnap: 0, zoomDelta: 0.25 });
+
+        leafletMap.on('dragstart zoomstart', function() {
+            hasUserInteracted = true;
+        });
+
+        const img = new Image();
+        img.src = IMAGE_FILE;
+        img.onload = function() {
+            const h = this.naturalHeight || this.height;
+            const w = this.naturalWidth || this.width;
+            const bounds = [[0, 0], [h, w]];
+            L.imageOverlay(IMAGE_FILE, bounds).addTo(leafletMap);
+
+            // 10% closer zoom, anchored to top-left corner (where the WASNS banner is)
+            initialBounds = [[h * 0.10, 0], [h, w * 0.90]];
+            leafletMap.fitBounds(initialBounds, { animate: false });
+
+            loadData(h);
+        };
+        img.onerror = function() { 
+            updateStatus("Error: map.jpg missing");
+            const loader = document.getElementById('loader');
+            if (loader) loader.style.display = 'none';
+        };
+    }
+
+    function loadData(imgHeight) {
+        const freshURL = CSV_URL + "&t=" + Date.now();
+        const loaderText = document.getElementById('loader-text');
+        if (loaderText) loaderText.textContent = "Downloading...";
+        
+        Papa.parse(freshURL, {
+            download: true, header: true, skipEmptyLines: true,
+            
+            step: function(row, parser) {
+                if (markers.length % 20 === 0 && loaderText) {
+                    loaderText.textContent = `Loaded ${markers.length} locations...`;
+                }
+                processRow(row.data, row.meta.fields, imgHeight);
+            },
+
+            complete: function() {
+                if (loaderText) loaderText.textContent = "Finalizing...";
+                setTimeout(function() {
+                    const loader = document.getElementById('loader');
+                    if (loader) loader.style.display = 'none';
+                    updateStatus(`Ready (${markers.length} locations)`);
+                    setTimeout(function() { 
+                        const statusBar = document.getElementById('status-bar');
+                        if (statusBar) statusBar.style.display = 'none'; 
+                    }, 3000);
+                }, 500);
+            },
+            error: function(e) { 
+                const loader = document.getElementById('loader');
+                if (loader) loader.style.display = 'none';
+                updateStatus("Error: " + e); 
+            }
+        });
+    }
+
+    function processRow(row, headers, imgHeight) {
+        if (!row || !headers) return;
+
+        const colA = row[headers[0]] || "";
+        const colC = row[headers[2]] || "";
+        const colE = row[headers[4]] || "";
+
+        const topKey = headers.find(function(h) { const c = h.toLowerCase().trim(); return c==='top'||c==='y'||c.includes('top'); });
+        const rightKey = headers.find(function(h) { const c = h.toLowerCase().trim(); return c==='right'||c==='x'||c.includes('right')||c.includes('left'); });
+
+        if (!topKey || !rightKey) return;
+
+        const cleanVal = function(val) { return parseFloat(String(val).replace(/[^0-9.-]/g, '')); };
+        let valY = cleanVal(row[topKey]);
+        let valX = cleanVal(row[rightKey]);
+
+        if (SWAP_XY) { const temp = valX; valX = valY; valY = temp; }
+
+        if (!isNaN(valY) && !isNaN(valX)) {
+            valY = valY * SCALE; valX = valX * SCALE;
+            
+            const marker = L.circleMarker([imgHeight - valY, valX], DEFAULT_STYLE).addTo(leafletMap);
+
+            let tooltipHTML = '<div>';
+            let searchableText = ""; 
+            
+            for (let i = 0; i < Math.min(6, headers.length); i++) {
+                const key = headers[i];
+                const raw = row[key];
+                if (raw && typeof raw === 'string') {
+                    const clean = raw.trim();
+                    if (clean !== "" && !clean.includes("#VALUE!") && !clean.includes("#N/A")) {
+                        tooltipHTML += `<b>${key}:</b> ${clean}<br>`;
+                        searchableText += clean + " ";
+                    }
+                }
+            }
+            tooltipHTML += '</div>';
+
+            let dropdownLabel = colA;
+            if (colC) dropdownLabel += " " + colC;
+            if (colE) dropdownLabel += " / " + colE;
+
+            searchableText += " " + dropdownLabel; 
+
+            marker.bindTooltip(tooltipHTML, {
+                permanent: false,
+                direction: 'top',
+                offset: [0, -14],
+                interactive: true,
+                className: 'custom-tooltip'
+            });
+            
+            const mObj = { 
+                text: searchableText.toLowerCase(), 
+                colA: String(colA).toLowerCase().trim(),
+                dropdownLabel: dropdownLabel.toLowerCase().trim(),
+                marker: marker 
+            };
+            markers.push(mObj);
+
+            marker.off('click');
+            marker.on('click', function(e) {
+                L.DomEvent.stopPropagation(e);
+                handleMarkerOrBubbleClick(mObj);
+            });
+
+            marker.on('tooltipopen', function(e) {
+                setMarkerHighlight(mObj, true);
+                const tipEl = e.tooltip.getElement();
+                if (tipEl && !tipEl._hasClickHandler) {
+                    tipEl._hasClickHandler = true;
+                    tipEl.addEventListener('click', function(ev) {
+                        ev.stopPropagation();
+                        handleMarkerOrBubbleClick(mObj);
+                    });
+                }
+            });
+
+            marker.on('tooltipclose', function() {
+                setMarkerHighlight(mObj, false);
+            });
+            
+            if (colA) {
+                const opt = document.createElement('option');
+                opt.value = dropdownLabel; 
+                const list = document.getElementById('familiesList');
+                if (list) list.appendChild(opt);
+            }
+        }
+    }
+
+    const searchInput = document.getElementById('familySearch');
+
+    // Hide mobile keyboard on Enter
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+            e.preventDefault();
+            this.blur();
+        }
+    });
+
+    searchInput.addEventListener('input', function(e) {
+        hasUserInteracted = true;
+        const val = e.target.value.toLowerCase().trim();
+        let firstMatch = null;
+        const isNumber = /^\d+$/.test(val);
+        
+        if (val === "" || (!isNumber && val.length < 3)) {
+            markers.forEach(function(m) {
+                m.marker.closeTooltip();
+                setMarkerHighlight(m, false);
+            });
+            return;
+        }
+
+        const exactDropdownMatch = markers.some(function(m) { return m.dropdownLabel === val; });
+        if (exactDropdownMatch) {
+            this.blur();
+        }
+
+        markers.forEach(function(m) {
+            let isMatch = false;
+            if (isNumber) {
+                isMatch = m.colA.includes(val);
+            } else {
+                isMatch = m.text.includes(val);
+            }
+
+            if (isMatch) {
+                m.marker.openTooltip();
+                setMarkerHighlight(m, true);
+                if (!firstMatch) firstMatch = m;
+            } else {
+                m.marker.closeTooltip();
+                setMarkerHighlight(m, false);
+            }
+        });
+
+        if (firstMatch && leafletMap) {
+            if (!leafletMap.getBounds().contains(firstMatch.marker.getLatLng())) {
+                leafletMap.panTo(firstMatch.marker.getLatLng());
+            }
+        }
+    });
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initMap);
+    } else {
+        initMap();
+    }
+</script>
+</body>
+</html>

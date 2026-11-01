@@ -10,51 +10,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
 
-    <!-- Early Global Definitions -->
-    <script>
-        var PASSWORD = 'wasns1970';
-        var leafletMap = null;
-        var initialBounds = null;
-        var hasUserInteracted = false;
-
-        function checkPassword() {
-            var input = document.getElementById('passInput');
-            if (!input) return;
-            if (input.value.toLowerCase().trim() === PASSWORD) {
-                input.blur();
-                document.getElementById('password-overlay').style.display = 'none';
-                if (leafletMap && typeof leafletMap.invalidateSize === 'function') {
-                    setTimeout(function() {
-                        leafletMap.invalidateSize({ pan: false });
-                        if (initialBounds && !hasUserInteracted) {
-                            leafletMap.fitBounds(initialBounds, { animate: false });
-                        }
-                    }, 250);
-                }
-            } else {
-                document.getElementById('error-msg').style.display = 'block';
-                input.value = '';
-            }
-        }
-
-        function toggleContact() {
-            var modal = document.getElementById('contact-modal');
-            if (modal) {
-                modal.style.display = (modal.style.display === 'flex') ? 'none' : 'flex';
-            }
-        }
-
-        function toggleLegend(e) {
-            if (e && e.stopPropagation) e.stopPropagation();
-            var pop = document.getElementById('legend-popover');
-            var dd = document.getElementById('search-dropdown');
-            if (dd) dd.style.display = 'none';
-            if (pop) {
-                pop.style.display = (pop.style.display === 'block') ? 'none' : 'block';
-            }
-        }
-    </script>
-
     <style>
         body, html { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
         #map { height: calc(100% - 70px); width: 100%; background: #f0f0f0; }
@@ -165,17 +120,457 @@
 
         #status-bar { position: fixed; bottom: 0; left: 0; width: 100%; background: #222; color: #fff; padding: 5px 10px; font-family: monospace; font-size: 11px; z-index: 2000; display: flex; justify-content: space-between; }
     </style>
-</head>
-<body>
 
-<div id="status-bar">
-    <span id="load-status">Initializing...</span>
-</div>
+    <!-- UNIFIED APPLICATION SCRIPT -->
+    <script>
+        var IMAGE_FILE = 'map.jpg'; 
+        var CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSktZVDBT6mPlo8-DXyiQAEU0uT-XocjwQRNSxQ1PptsQSf59U2u9zIggzdB80xnc09nhaiVvJxlwld/pub?gid=0&single=true&output=csv';
+        var PASSWORD = 'wasns1970';
+        var SWAP_XY = true; 
+        var SCALE = 1.0;    
 
-<!-- LIVE LOADING SCREEN -->
-<div id="loader">
-    <div class="spinner"></div>
-    <div id="loader-text">Connecting...</div>
-</div>
+        var DEFAULT_STYLE = {
+            radius: 12,
+            color: 'white',
+            weight: 1,
+            opacity: 0.6,
+            fillColor: '#2E7D32',
+            fillOpacity: 0.2
+        };
 
-<!-- 1. AUTH
+        var HIGHLIGHT_STYLE = {
+            radius: 14,
+            color: '#FFD600',
+            weight: 3,
+            opacity: 1.0,
+            fillColor: '#FF6D00',
+            fillOpacity: 0.55
+        };
+
+        var leafletMap = null;
+        var markers = []; 
+        var initialBounds = null;
+        var hasUserInteracted = false;
+        var mapInitialized = false;
+        var dataLoaded = false;
+
+        function updateStatus(msg) {
+            var el = document.getElementById('load-status');
+            if (el) el.textContent = msg;
+        }
+
+        function checkPassword() {
+            var input = document.getElementById('passInput');
+            if (!input) return;
+            if (input.value.toLowerCase().trim() === PASSWORD) {
+                input.blur();
+                document.getElementById('password-overlay').style.display = 'none';
+                if (!mapInitialized) {
+                    initMap();
+                }
+                if (leafletMap && typeof leafletMap.invalidateSize === 'function') {
+                    setTimeout(function() {
+                        leafletMap.invalidateSize({ pan: false });
+                        if (initialBounds && !hasUserInteracted) {
+                            leafletMap.fitBounds(initialBounds, { animate: false });
+                        }
+                    }, 250);
+                }
+            } else {
+                document.getElementById('error-msg').style.display = 'block';
+                input.value = '';
+            }
+        }
+
+        function toggleContact() {
+            var modal = document.getElementById('contact-modal');
+            if (modal) {
+                modal.style.display = (modal.style.display === 'flex') ? 'none' : 'flex';
+            }
+        }
+
+        function toggleLegend(e) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            var pop = document.getElementById('legend-popover');
+            var dd = document.getElementById('search-dropdown');
+            if (dd) dd.style.display = 'none';
+            if (pop) {
+                pop.style.display = (pop.style.display === 'block') ? 'none' : 'block';
+            }
+        }
+
+        // Strict word-start matcher: matches start of word or Hebrew/Arabic 'and' prefix (ו / و)
+        function textMatchesToken(textStr, token) {
+            var words = textStr.toLowerCase().split(/[\s,/()\-–—:;|+"'`]+/);
+            for (var i = 0; i < words.length; i++) {
+                var w = words[i];
+                if (!w) continue;
+                if (w.indexOf(token) === 0 || w.indexOf('ו' + token) === 0 || w.indexOf('و' + token) === 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function markerMatchesQuery(mObj, queryVal, isNumber) {
+            if (isNumber) {
+                var colWords = mObj.colA.split(/[\s,/()\-–—:;|+]+/);
+                for (var i = 0; i < colWords.length; i++) {
+                    if (colWords[i] === queryVal || colWords[i].indexOf(queryVal) === 0) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            var qTokens = queryVal.split(/[\s,/()\-–—:;|]+/).filter(Boolean);
+            if (qTokens.length === 0) return false;
+            for (var j = 0; j < qTokens.length; j++) {
+                if (!textMatchesToken(mObj.text, qTokens[j])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function setMarkerHighlight(mObj, isHighlighted) {
+            if (!mObj || !mObj.marker) return;
+            if (isHighlighted) {
+                mObj.marker.setStyle(HIGHLIGHT_STYLE);
+                mObj.marker.bringToFront();
+            } else {
+                mObj.marker.setStyle(DEFAULT_STYLE);
+            }
+        }
+
+        function getOpenMarkers() {
+            return markers.filter(function(m) { return m.marker.isTooltipOpen(); });
+        }
+
+        function focusSingleMarker(targetObj) {
+            markers.forEach(function(m) {
+                if (m !== targetObj) {
+                    m.marker.closeTooltip();
+                    setMarkerHighlight(m, false);
+                }
+            });
+            targetObj.marker.openTooltip();
+            setMarkerHighlight(targetObj, true);
+            if (leafletMap) {
+                leafletMap.panTo(targetObj.marker.getLatLng(), { animate: true });
+            }
+        }
+
+        function handleMarkerOrBubbleClick(targetObj) {
+            hasUserInteracted = true;
+            var dd = document.getElementById('search-dropdown');
+            if (dd) dd.style.display = 'none';
+
+            var openList = getOpenMarkers();
+            var isCurrentlyOpen = targetObj.marker.isTooltipOpen();
+
+            if (openList.length > 1) {
+                focusSingleMarker(targetObj);
+            } else if (isCurrentlyOpen) {
+                targetObj.marker.closeTooltip();
+                setMarkerHighlight(targetObj, false);
+            } else {
+                focusSingleMarker(targetObj);
+            }
+        }
+
+        function renderSearchDropdown(matchedList, queryVal, isNumber) {
+            var dd = document.getElementById('search-dropdown');
+            if (!dd) return;
+            dd.innerHTML = '';
+
+            if (!matchedList || matchedList.length === 0) {
+                dd.style.display = 'none';
+                return;
+            }
+
+            var qTokens = queryVal.split(/[\s,/()\-–—:;|]+/).filter(Boolean);
+
+            matchedList.forEach(function(m) {
+                var item = document.createElement('div');
+                item.className = 'search-item';
+
+                var mainText = m.baseDropdownLabel;
+                var extraNote = '';
+
+                var baseMatchesAll = isNumber || qTokens.every(function(qt) {
+                    return textMatchesToken(m.baseDropdownLabel, qt);
+                });
+
+                if (!baseMatchesAll) {
+                    var matchedExtra = m.extraFields.find(function(f) {
+                        return qTokens.some(function(qt) { return textMatchesToken(f, qt); });
+                    });
+                    if (matchedExtra) {
+                        extraNote = matchedExtra;
+                    }
+                }
+
+                item.textContent = mainText;
+                if (extraNote) {
+                    var span = document.createElement('span');
+                    span.className = 'search-item-extra';
+                    span.textContent = ' (' + extraNote + ')';
+                    item.appendChild(span);
+                }
+
+                item.addEventListener('click', function(ev) {
+                    ev.stopPropagation();
+                    var input = document.getElementById('familySearch');
+                    if (input) {
+                        input.value = mainText;
+                        input.blur();
+                    }
+                    dd.style.display = 'none';
+                    focusSingleMarker(m);
+                });
+
+                dd.appendChild(item);
+            });
+
+            dd.style.display = 'block';
+        }
+
+        function clearSearch() {
+            var input = document.getElementById('familySearch');
+            var clearBtn = document.getElementById('clear-search-btn');
+            var dd = document.getElementById('search-dropdown');
+            if (input) input.value = '';
+            if (clearBtn) clearBtn.style.display = 'none';
+            if (dd) dd.style.display = 'none';
+            markers.forEach(function(m) {
+                m.marker.closeTooltip();
+                setMarkerHighlight(m, false);
+            });
+        }
+
+        function processRow(row, headers, imgHeight) {
+            if (!row || !headers) return;
+
+            var colA = (row[headers[0]] || "").trim();
+            var colC = (row[headers[2]] || "").trim();
+            var colE = (row[headers[4]] || "").trim();
+
+            var topKey = headers.find(function(h) { var c = h.toLowerCase().trim(); return c==='top'||c==='y'||c.includes('top'); });
+            var rightKey = headers.find(function(h) { var c = h.toLowerCase().trim(); return c==='right'||c==='x'||c.includes('right')||c.includes('left'); });
+
+            if (!topKey || !rightKey) return;
+
+            var cleanVal = function(val) { return parseFloat(String(val).replace(/[^0-9.-]/g, '')); };
+            var valY = cleanVal(row[topKey]);
+            var valX = cleanVal(row[rightKey]);
+
+            if (SWAP_XY) { var temp = valX; valX = valY; valY = temp; }
+
+            if (!isNaN(valY) && !isNaN(valX)) {
+                valY = valY * SCALE; valX = valX * SCALE;
+                
+                var marker = L.circleMarker([imgHeight - valY, valX], DEFAULT_STYLE).addTo(leafletMap);
+
+                var tooltipHTML = '<div>';
+                var searchableText = ""; 
+                var extraFields = [];
+                
+                // Columns A-F (0..5: Hebrew & Arabic) followed by Columns I-J (8..9: English Description & Renters)
+                var displayIndices = [0, 1, 2, 3, 4, 5, 8, 9];
+                for (var idx = 0; idx < displayIndices.length; idx++) {
+                    var i = displayIndices[idx];
+                    if (i >= headers.length) continue;
+                    var key = headers[i];
+                    var raw = row[key];
+                    if (raw && typeof raw === 'string') {
+                        var clean = raw.trim();
+                        if (clean !== "" && !clean.includes("#VALUE!") && !clean.includes("#N/A") && !clean.includes("#REF!") && !clean.includes("#ERROR!")) {
+                            tooltipHTML += '<b>' + key + ':</b> <span dir="auto">' + clean + '</span><br>';
+                            searchableText += clean + " ";
+                            if (i !== 0 && i !== 2 && i !== 4) {
+                                extraFields.push(clean);
+                            }
+                        }
+                    }
+                }
+                tooltipHTML += '</div>';
+
+                var baseDropdownLabel = colA;
+                if (colC) baseDropdownLabel += " " + colC;
+                if (colE) baseDropdownLabel += " / " + colE;
+
+                searchableText += " " + baseDropdownLabel; 
+
+                var isNearTop = (valY < imgHeight * 0.25);
+                var tipDirection = isNearTop ? 'bottom' : 'top';
+                var tipOffset = isNearTop ? [0, 14] : [0, -14];
+
+                marker.bindTooltip(tooltipHTML, {
+                    permanent: false,
+                    direction: tipDirection,
+                    offset: tipOffset,
+                    interactive: true,
+                    className: 'custom-tooltip'
+                });
+
+                var mObj = { 
+                    text: searchableText.toLowerCase(), 
+                    colA: String(colA).toLowerCase().trim(),
+                    baseDropdownLabel: baseDropdownLabel,
+                    extraFields: extraFields,
+                    marker: marker 
+                };
+                markers.push(mObj);
+
+                marker.off('click');
+                marker.on('click', function(e) {
+                    L.DomEvent.stopPropagation(e);
+                    handleMarkerOrBubbleClick(mObj);
+                });
+
+                marker.on('tooltipopen', function(e) {
+                    setMarkerHighlight(mObj, true);
+                    var tipEl = e.tooltip.getElement();
+                    if (tipEl && !tipEl._hasClickHandler) {
+                        tipEl._hasClickHandler = true;
+                        tipEl.addEventListener('click', function(ev) {
+                            ev.stopPropagation();
+                            handleMarkerOrBubbleClick(mObj);
+                        });
+                    }
+                });
+
+                marker.on('tooltipclose', function() {
+                    setMarkerHighlight(mObj, false);
+                });
+            }
+        }
+
+        function loadData(imgHeight) {
+            if (dataLoaded) return;
+            dataLoaded = true;
+
+            var freshURL = CSV_URL + "&t=" + Date.now();
+            var loaderText = document.getElementById('loader-text');
+            if (loaderText) loaderText.textContent = "Downloading...";
+            
+            Papa.parse(freshURL, {
+                download: true, header: true, skipEmptyLines: true,
+                
+                step: function(row) {
+                    if (markers.length % 20 === 0 && loaderText) {
+                        loaderText.textContent = "Loaded " + markers.length + " locations...";
+                    }
+                    try {
+                        processRow(row.data, row.meta.fields, imgHeight);
+                    } catch (err) {
+                        console.error("Row parse error:", err);
+                    }
+                },
+
+                complete: function() {
+                    if (loaderText) loaderText.textContent = "Finalizing...";
+                    setTimeout(function() {
+                        var loader = document.getElementById('loader');
+                        if (loader) loader.style.display = 'none';
+                        updateStatus("Ready (" + markers.length + " locations)");
+                        setTimeout(function() { 
+                            var statusBar = document.getElementById('status-bar');
+                            if (statusBar) statusBar.style.display = 'none'; 
+                        }, 3000);
+                    }, 500);
+                },
+                error: function(e) { 
+                    var loader = document.getElementById('loader');
+                    if (loader) loader.style.display = 'none';
+                    updateStatus("Error: " + e); 
+                }
+            });
+        }
+
+        function initMap() {
+            if (mapInitialized) return;
+            var mapContainer = document.getElementById('map');
+            if (!mapContainer) return;
+
+            if (typeof L === 'undefined') {
+                updateStatus("Error: Leaflet library failed to load");
+                var loaderText = document.getElementById('loader-text');
+                if (loaderText) loaderText.textContent = "Error loading map library";
+                return;
+            }
+
+            mapInitialized = true;
+            leafletMap = L.map('map', { crs: L.CRS.Simple, minZoom: -3, zoomSnap: 0, zoomDelta: 0.25 });
+
+            leafletMap.on('dragstart zoomstart', function() {
+                hasUserInteracted = true;
+            });
+
+            var searchInput = document.getElementById('familySearch');
+            var clearBtn = document.getElementById('clear-search-btn');
+
+            if (searchInput) {
+                searchInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' || e.keyCode === 13) {
+                        e.preventDefault();
+                        var dd = document.getElementById('search-dropdown');
+                        if (dd) dd.style.display = 'none';
+                        this.blur();
+                    }
+                });
+
+                searchInput.addEventListener('input', function(e) {
+                    hasUserInteracted = true;
+                    var val = e.target.value.toLowerCase().trim();
+                    var isNumber = /^\d+$/.test(val);
+
+                    if (clearBtn) {
+                        clearBtn.style.display = (val.length > 0) ? 'block' : 'none';
+                    }
+
+                    if (val === "" || (!isNumber && val.length < 3)) {
+                        var dd = document.getElementById('search-dropdown');
+                        if (dd) dd.style.display = 'none';
+                        markers.forEach(function(m) {
+                            m.marker.closeTooltip();
+                            setMarkerHighlight(m, false);
+                        });
+                        return;
+                    }
+
+                    var firstMatch = null;
+                    var matchedList = [];
+
+                    markers.forEach(function(m) {
+                        var isMatch = markerMatchesQuery(m, val, isNumber);
+
+                        if (isMatch) {
+                            matchedList.push(m);
+                            m.marker.openTooltip();
+                            setMarkerHighlight(m, true);
+                            if (!firstMatch) firstMatch = m;
+                        } else {
+                            m.marker.closeTooltip();
+                            setMarkerHighlight(m, false);
+                        }
+                    });
+
+                    renderSearchDropdown(matchedList, val, isNumber);
+
+                    if (firstMatch && leafletMap) {
+                        if (!leafletMap.getBounds().contains(firstMatch.marker.getLatLng())) {
+                            leafletMap.panTo(firstMatch.marker.getLatLng());
+                        }
+                    }
+                });
+            }
+
+            document.addEventListener('click', function() {
+                var pop = document.getElementById('legend-popover');
+                if (pop && pop.style.display === 'block') pop.style.display = 'none';
+                var dd = document.getElementById('search-dropdown');
+                if (dd && dd.style.display === 'block') dd.style.display = 'none';
+            });
+
+            var img =
